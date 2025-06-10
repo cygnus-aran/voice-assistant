@@ -2,14 +2,16 @@ package config
 
 // ClaudeConfig holds Claude API settings
 type ClaudeConfig struct {
-	APIKey string `json:"api_key"`
-	Model  string `json:"model"`
+	APIKey       string `json:"api_key"`
+	Model        string `json:"model"`
+	SystemPrompt string `json:"system_prompt"`
 }
 
 // DefaultClaudeConfig returns default Claude configuration
 func DefaultClaudeConfig() ClaudeConfig {
 	return ClaudeConfig{
-		Model: "claude-3-sonnet-20240229",
+		Model:        "claude-sonnet-4-20250514",
+		SystemPrompt: "You are a helpful AI assistant. Respond concisely and naturally for voice conversations.",
 		// APIKey needs to be set by user
 	}
 }
@@ -25,7 +27,10 @@ func (c *ClaudeConfig) Validate() error {
 		return ErrMissingClaudeKey
 	}
 	if c.Model == "" {
-		c.Model = "claude-3-sonnet-20240229" // Set default
+		c.Model = "claude-sonnet-4-20250514" // Set default
+	}
+	if c.SystemPrompt == "" {
+		c.SystemPrompt = "You are a helpful AI assistant. Respond concisely and naturally for voice conversations."
 	}
 	return nil
 }

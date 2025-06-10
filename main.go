@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	"voice-assistant/internal/claude"
 
 	"github.com/gen2brain/beeep"
 	"github.com/getlantern/systray"
@@ -21,6 +22,7 @@ var (
 	hotkeyListener       *hotkey.Listener
 	azureSpeechWebSocket *speech.AzureWebSocketSpeechService
 	appConfig            *config.Config
+	claudeClient         *claude.Client
 	currentStatus        = "Ready"
 	isRecording          = false
 )
@@ -49,7 +51,15 @@ func main() {
 		log.Printf("⚠️  Claude API not configured")
 		log.Printf("   Add your api_key to: %s", config.GetConfigPath())
 	} else {
-		log.Printf("✅ Claude API configured (Model: %s)", appConfig.Claude.Model)
+		claudeClient = claude.NewClientFromConfig(appConfig)
+
+		// Test connection
+		err = claudeClient.TestConnection()
+		if err != nil {
+			log.Printf("❌ Claude connection test failed: %v", err)
+		} else {
+			log.Println("✅ Claude API connection successful!")
+		}
 	}
 
 	// Set up graceful shutdown
@@ -185,9 +195,26 @@ func onSpeechRecognized(text string) {
 	log.Printf("   📏 Text length: %d characters", len(text))
 	updateStatus("Processing")
 
-	// TODO: Send to Claude API here
-	log.Printf("📤 TODO: Send to Claude: %s", text)
-	log.Printf("💡 This is where we'll integrate Claude API next")
+	// Send transcription to Claude API
+	if claudeClient != nil {
+		updateStatus("Thinking")
+
+		claudeResponse, err := claudeClient.SendMessage(text)
+		if err != nil {
+			log.Printf("Claude API failed: %v", err)
+			updateStatus("Error")
+			beeep.Notify("AI Assistant", "❌ Claude API failed", "")
+		} else {
+			log.Printf("Claude response: %s", claudeResponse)
+			updateStatus("Ready")
+
+			// TODO: Convert Claude's response to speech using TTS
+			log.Printf("Converting to speech...")
+		}
+	} else {
+		log.Println("Claude not configured - skipping AI processing")
+		beeep.Notify("AI Assistant", "⚠️ Claude API not configured", "")
+	}
 
 	// Auto-stop after recognition for now
 	go func() {
