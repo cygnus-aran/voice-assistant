@@ -6,6 +6,7 @@ require (
 	github.com/gen2brain/beeep v0.0.0-20200526185328-e9c15c258e28
 	github.com/getlantern/systray v1.2.1
 	github.com/gordonklaus/portaudio v0.0.0-20250206071425-98a94950218b
+	github.com/gorilla/websocket v1.5.0
 )
 
 require (

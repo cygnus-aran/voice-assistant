@@ -124,9 +124,16 @@ func (c *Config) UpdateClaudeConfig(claude ClaudeConfig) error {
 
 // getConfigPath returns the path to params.json
 func getConfigPath() string {
+	// For development, always check local params.json first
+	localPath := "params.json"
+	if _, err := os.Stat(localPath); err == nil {
+		return localPath
+	}
+
+	// Fallback to user config directory
 	userConfigDir, err := os.UserConfigDir()
 	if err != nil {
-		// Fallback to current directory
+		// Final fallback to current directory
 		return "params.json"
 	}
 	return filepath.Join(userConfigDir, "voice-assistant", "params.json")

@@ -1,7 +1,7 @@
 package main
 
 import (
-	"fmt"
+	_ "fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -13,17 +13,16 @@ import (
 	"github.com/getlantern/systray/example/icon"
 
 	"voice-assistant/config"
-	"voice-assistant/internal/audio"
 	"voice-assistant/internal/hotkey"
 	"voice-assistant/internal/speech"
 )
 
 var (
-	hotkeyListener *hotkey.Listener
-	audioRecorder  *audio.Recorder
-	speechService  *speech.AzureSpeechService
-	appConfig      *config.Config
-	currentStatus  = "Ready"
+	hotkeyListener       *hotkey.Listener
+	azureSpeechWebSocket *speech.AzureWebSocketSpeechService
+	appConfig            *config.Config
+	currentStatus        = "Ready"
+	isRecording          = false
 )
 
 func main() {
@@ -57,32 +56,26 @@ func main() {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 
-	// Initialize audio recorder
-	audioRecorder = audio.NewRecorder()
-	err = audioRecorder.Initialize()
-	if err != nil {
-		log.Fatalf("Failed to initialize audio: %v", err)
-	}
-	defer audioRecorder.Cleanup()
-
-	// Set audio callbacks
-	audioRecorder.SetCallbacks(onRecordingComplete, onRecordingError)
-
-	// Initialize Azure Speech Service
+	// Initialize Azure WebSocket Speech Service
 	if appConfig.Azure.IsConfigured() {
-		speechConfig := speech.AzureConfig{
-			SubscriptionKey: appConfig.Azure.SubscriptionKey,
-			Region:          appConfig.Azure.Region,
-			Language:        appConfig.Azure.Language,
-		}
-		speechService = speech.NewAzureSpeechService(speechConfig)
-
-		// Test connection
-		err = speechService.TestConnection()
+		azureSpeechWebSocket, err = speech.NewAzureWebSocketSpeechService(
+			appConfig.Azure.SubscriptionKey,
+			appConfig.Azure.Region,
+			appConfig.Azure.Language,
+		)
 		if err != nil {
-			log.Printf("❌ Azure connection test failed: %v", err)
+			log.Printf("❌ Failed to initialize Azure WebSocket Speech: %v", err)
 		} else {
-			log.Println("✅ Azure Speech Services connection successful!")
+			// Set callbacks for speech recognition
+			azureSpeechWebSocket.SetCallbacks(onSpeechRecognized, onSpeechError)
+
+			// Test connection
+			err = azureSpeechWebSocket.TestConnection()
+			if err != nil {
+				log.Printf("❌ Azure WebSocket connection test failed: %v", err)
+			} else {
+				log.Println("✅ Azure WebSocket Speech Service connection successful!")
+			}
 		}
 	}
 
@@ -99,8 +92,8 @@ func main() {
 		if hotkeyListener != nil {
 			hotkeyListener.Stop()
 		}
-		if audioRecorder != nil {
-			audioRecorder.Cleanup()
+		if azureSpeechWebSocket != nil {
+			azureSpeechWebSocket.Close()
 		}
 		systray.Quit()
 	}()
@@ -126,91 +119,97 @@ func onCtrlQPressed() {
 
 // onF12Pressed handles F12 key press events
 func onF12Pressed() {
-	if audioRecorder.IsRecording() {
+	log.Printf("🔑 F12 KEY PRESSED - Current recording state: %v", isRecording)
+
+	if azureSpeechWebSocket == nil {
+		log.Printf("❌ Azure WebSocket Speech not available")
+		beeep.Notify("AI Assistant", "❌ Azure Speech Services not configured", "")
+		return
+	}
+
+	if isRecording {
 		// Stop recording
-		log.Println("Stopping audio recording...")
+		log.Printf("🛑 USER REQUESTED STOP")
 		updateStatus("Processing")
-		err := beeep.Notify("AI Assistant", "🔴 Stopping recording...", "")
+		err := beeep.Notify("AI Assistant", "🔴 Stopping recognition...", "")
 		if err != nil {
 			log.Printf("Failed to show notification: %v", err)
 		}
 
-		err = audioRecorder.StopRecording()
+		err = azureSpeechWebSocket.StopContinuousRecognition()
 		if err != nil {
-			log.Printf("Failed to stop recording: %v", err)
+			log.Printf("❌ Failed to stop recognition: %v", err)
 			updateStatus("Error")
-			beeep.Notify("AI Assistant", "❌ Failed to stop recording", "")
+			beeep.Notify("AI Assistant", "❌ Failed to stop recognition", "")
+		} else {
+			isRecording = false
+			updateStatus("Ready")
+			log.Printf("✅ Recording stopped successfully")
 		}
 	} else {
 		// Start recording
-		log.Println("Starting audio recording...")
+		log.Printf("🎤 USER REQUESTED START")
 		updateStatus("Listening")
-		err := beeep.Notify("AI Assistant", "🎤 Recording... Press F12 to stop.", "")
+		err := beeep.Notify("AI Assistant", "🎤 Streaming live... Press F12 to stop.", "")
 		if err != nil {
 			log.Printf("Failed to show notification: %v", err)
 		}
 
-		err = audioRecorder.StartRecording()
+		err = azureSpeechWebSocket.StartContinuousRecognition()
 		if err != nil {
-			log.Printf("Failed to start recording: %v", err)
+			log.Printf("❌ Failed to start recognition: %v", err)
 			updateStatus("Error")
-			beeep.Notify("AI Assistant", "❌ Failed to start recording", "")
+			beeep.Notify("AI Assistant", "❌ Failed to start recognition", "")
+		} else {
+			isRecording = true
+			log.Printf("✅ Live streaming started successfully")
+			log.Printf("💡 Now speak clearly - audio is streaming to Azure in real-time!")
 		}
 	}
+	err := azureSpeechWebSocket.StartContinuousRecognition()
+	if err != nil {
+		log.Printf("❌ Failed to start recognition: %v", err)
+		updateStatus("Error")
+		beeep.Notify("AI Assistant", "❌ Failed to start recognition", "")
+	} else {
+		isRecording = true
+		log.Printf("✅ Live streaming started successfully")
+		log.Printf("💡 Now speak clearly - audio is streaming to Azure in real-time!")
+	}
 }
 
-// Audio recording callbacks
-func onRecordingComplete(filePath string, duration time.Duration) {
-	log.Printf("Recording completed: %s (duration: %v)", filePath, duration)
+// Speech recognition callbacks
+func onSpeechRecognized(text string) {
+	log.Printf("🎉 SPEECH CALLBACK TRIGGERED")
+	log.Printf("   📝 Recognized text: '%s'", text)
+	log.Printf("   📏 Text length: %d characters", len(text))
 	updateStatus("Processing")
 
-	err := beeep.Notify("AI Assistant",
-		fmt.Sprintf("🎤 Processing audio... Duration: %.1fs", duration.Seconds()), "")
-	if err != nil {
-		log.Printf("Failed to show notification: %v", err)
-	}
+	// TODO: Send to Claude API here
+	log.Printf("📤 TODO: Send to Claude: %s", text)
+	log.Printf("💡 This is where we'll integrate Claude API next")
 
-	// Convert speech to text using Azure
-	if speechService != nil {
-		go func() {
-			transcription, err := speechService.SpeechToText(filePath)
-			if err != nil {
-				log.Printf("Speech-to-text failed: %v", err)
-				updateStatus("Error")
-				beeep.Notify("AI Assistant", "❌ Speech recognition failed", "")
-			} else {
-				log.Printf("Transcription: %s", transcription)
-				updateStatus("Ready")
-
-				// Show transcription to user
-				beeep.Notify("AI Assistant",
-					fmt.Sprintf("✅ Transcription:\n%s", transcription), "")
-
-				// TODO: Send to Claude API here
-				log.Printf("TODO: Send to Claude: %s", transcription)
-			}
-
-			// Clean up the audio file
-			audioRecorder.DeleteTempFile()
-		}()
-	} else {
-		// No Azure configured, just clean up
-		log.Println("Azure not configured - skipping speech recognition")
-		updateStatus("Ready")
-		beeep.Notify("AI Assistant", "⚠️ Azure Speech Services not configured", "")
-
-		// Clean up after delay
-		go func() {
-			time.Sleep(2 * time.Second)
-			audioRecorder.DeleteTempFile()
-		}()
-	}
+	// Auto-stop after recognition for now
+	go func() {
+		log.Printf("⏰ Auto-stopping in 3 seconds...")
+		time.Sleep(3 * time.Second)
+		if isRecording {
+			log.Printf("🔄 Auto-stopping recognition...")
+			azureSpeechWebSocket.StopContinuousRecognition()
+			isRecording = false
+			updateStatus("Ready")
+			log.Printf("✅ Auto-stop completed")
+		}
+	}()
 }
 
-func onRecordingError(err error) {
-	log.Printf("Recording error: %v", err)
+func onSpeechError(err error) {
+	log.Printf("🚨 SPEECH ERROR CALLBACK TRIGGERED")
+	log.Printf("   ❌ Error details: %v", err)
+	log.Printf("   💡 Check your microphone, internet connection, and Azure credentials")
 	updateStatus("Error")
-	beeep.Notify("AI Assistant", "❌ Recording error occurred", "")
+	beeep.Notify("AI Assistant", "❌ Speech recognition error", "")
+	isRecording = false
 }
 
 func onReady() {
@@ -249,7 +248,7 @@ func onReady() {
 				}
 
 			case <-mAbout.ClickedCh:
-				err := beeep.Notify("About", "AI Desktop Assistant v1.0\nBuilt with Go", "")
+				err := beeep.Notify("About", "AI Desktop Assistant v1.0\nBuilt with Go + Azure WebSocket Speech", "")
 				if err != nil {
 					log.Printf("Failed to show notification: %v", err)
 				}
